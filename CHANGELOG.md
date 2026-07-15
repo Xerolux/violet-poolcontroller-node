@@ -14,3 +14,5 @@ All notable changes to this project will be documented in this file.
   thresholds.
 - Add a daily CI parity guard for the Python client surface, exports, endpoints, actions, and full
   controller error catalog.
+- Match upstream request hardening with per-client rate limiting, safe retry semantics, strict
+  actuator durations, finite numeric parsing, and single-probe circuit-breaker recovery.

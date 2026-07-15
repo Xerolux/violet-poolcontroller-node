@@ -1,7 +1,7 @@
 {
   "repository": "Xerolux/violet-poolController-api",
   "branch": "main",
-  "commit": "f10d6605fb9094e9066f96f93c1f47f2e1c55259",
+  "commit": "1a1617f235af74a31a3c358ab2f31fcfd749e0a1",
   "version": "0.0.35",
   "clientMembers": {
     "__init__": "constructor",

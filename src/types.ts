@@ -1,5 +1,7 @@
 import type { Dispatcher, RequestInit, Response } from "undici";
 
+import type { RateLimiter } from "./rate-limiter.js";
+
 export type JsonPrimitive = boolean | number | string | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 export type JsonRecord = Record<string, JsonValue>;
@@ -17,6 +19,7 @@ export interface VioletPoolClientOptions {
   maxRetries?: number;
   retryBaseDelayMs?: number;
   dosingStandalone?: boolean;
+  rateLimiter?: RateLimiter;
   fetch?: FetchImplementation;
   dispatcher?: Dispatcher;
 }

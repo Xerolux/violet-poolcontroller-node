@@ -36,6 +36,8 @@ import type {
   VioletPoolClientOptions,
 } from "./types.js";
 
+const API_PRIORITY_CRITICAL = 1;
+
 function isRecord(value: unknown): value is ControllerRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -52,6 +54,15 @@ function stripJsonString(value: string): string {
   } catch {
     return value;
   }
+}
+
+function validateDuration(value: number, minimum = 0, maximum = 86_400): number {
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value < minimum || value > maximum) {
+    throw new VioletPoolError(
+      `Duration must be a whole number between ${minimum} and ${maximum} seconds`,
+    );
+  }
+  return value;
 }
 
 export function validateSetpoint(field: string, value: number): void {
@@ -187,7 +198,11 @@ export class VioletPoolClient {
       }
     }
     return this.commandResult(
-      await this.transport.request(API_ENDPOINTS.setConfig, { method: "POST", form }),
+      await this.transport.request(API_ENDPOINTS.setConfig, {
+        method: "POST",
+        form,
+        retryable: true,
+      }),
     );
   }
 
@@ -233,7 +248,7 @@ export class VioletPoolClient {
     if (options.output.trim().length === 0) {
       throw new VioletPoolError("Output identifier is required");
     }
-    const durationMilliseconds = Math.max(0, Math.trunc(options.durationSeconds ?? 120)) * 1_000;
+    const durationMilliseconds = validateDuration(options.durationSeconds ?? 120) * 1_000;
     const query = quoteCommand(
       `${options.output},${options.mode ?? "SWITCH"},${durationMilliseconds}`,
     );
@@ -248,25 +263,22 @@ export class VioletPoolClient {
     options: { durationSeconds?: number; lastValue?: number } = {},
   ): Promise<CommandResult> {
     const normalizedKey = InputSanitizer.validateDeviceKey(key);
+    const duration =
+      options.durationSeconds === undefined ? undefined : validateDuration(options.durationSeconds);
     if (this.standalone && this.isBaseModuleFunction(normalizedKey)) {
       throw new VioletPoolError(
         `Function '${normalizedKey}' requires the Violet base module and is not available in dosing-standalone mode`,
       );
     }
     if (normalizedKey.startsWith("DOS_")) {
-      return this.triggerDosing(normalizedKey, action, options.durationSeconds);
+      return this.triggerDosing(normalizedKey, action, duration);
     }
     const normalizedAction =
       normalizedKey === "PVSURPLUS"
         ? this.normalizePvSurplusAction(action)
         : action.trim().toUpperCase();
     const query = quoteCommand(
-      this.manualCommand(
-        normalizedKey,
-        normalizedAction,
-        options.durationSeconds,
-        options.lastValue,
-      ),
+      this.manualCommand(normalizedKey, normalizedAction, duration, options.lastValue),
     );
     return this.commandResult(
       await this.transport.request(API_ENDPOINTS.setFunctionManually, { query }),
@@ -279,9 +291,8 @@ export class VioletPoolClient {
   ): Promise<CommandResult> {
     const key = DOSING_FUNCTIONS[dosingType];
     if (key === undefined) throw new VioletPoolError(`Unknown dosing type: ${dosingType}`);
-    return this.setSwitchState(key, durationSeconds <= 0 ? ACTIONS.off : ACTIONS.on, {
-      durationSeconds,
-    });
+    if (durationSeconds <= 0) return this.setSwitchState(key, ACTIONS.off);
+    return this.setSwitchState(key, ACTIONS.on, { durationSeconds });
   }
 
   async setPvSurplus(options: { active: boolean; pumpSpeed?: number }): Promise<CommandResult> {
@@ -331,7 +342,15 @@ export class VioletPoolClient {
 
   async setDeviceTemperature(climateKey: string, temperature: number): Promise<CommandResult> {
     const normalized = climateKey.trim().toUpperCase();
-    const configKey = normalized === "SOLAR" ? "SOLAR_maxtemp" : `${normalized}_set_temp`;
+    const configKey =
+      normalized === "HEATER"
+        ? "HEATER_set_temp"
+        : normalized === "SOLAR"
+          ? "SOLAR_maxtemp"
+          : undefined;
+    if (configKey === undefined) {
+      throw new VioletPoolError(`Unknown climate key '${climateKey}'. Expected HEATER or SOLAR`);
+    }
     return this.setTargetValue(configKey, temperature);
   }
 
@@ -366,12 +385,19 @@ export class VioletPoolClient {
     const prefix = DOSING_CONFIG_PREFIX[dosingType];
     if (prefix === undefined) throw new VioletPoolError(`Unknown dosing type '${dosingType}'`);
     const result = await this.getConfig([`${prefix}_use`]);
-    return Number(result[`${prefix}_use`] ?? 0) !== 0;
+    const rawValue = result[`${prefix}_use`] ?? 0;
+    const numeric = Number(rawValue);
+    if (!Number.isFinite(numeric)) {
+      throw new VioletPayloadError(
+        `Invalid dosage enabled state for ${dosingType}: ${String(rawValue)}`,
+      );
+    }
+    return Math.trunc(numeric) !== 0;
   }
 
   async setPumpSpeed(speed: number, durationSeconds = 0): Promise<CommandResult> {
     return this.setSwitchState("PUMP", ACTIONS.on, {
-      durationSeconds: Math.max(0, Math.trunc(durationSeconds)),
+      durationSeconds: validateDuration(durationSeconds),
       lastValue: Math.max(1, Math.min(3, Math.trunc(speed))),
     });
   }
@@ -446,7 +472,11 @@ export class VioletPoolClient {
   }
 
   async resetBlocking(): Promise<CommandResult> {
-    return this.commandResult(await this.transport.request(API_ENDPOINTS.resetBlocking));
+    return this.commandResult(
+      await this.transport.request(API_ENDPOINTS.resetBlocking, {
+        priority: API_PRIORITY_CRITICAL,
+      }),
+    );
   }
 
   async setCanAmount(
@@ -470,6 +500,7 @@ export class VioletPoolClient {
           amount: Math.trunc(amountMl),
           cid: canisterId,
         },
+        priority: API_PRIORITY_CRITICAL,
       }),
     );
   }
@@ -480,6 +511,7 @@ export class VioletPoolClient {
     return this.commandResult(
       await this.transport.request(
         enabled ? definition.enableEndpoint : definition.disableEndpoint,
+        { priority: API_PRIORITY_CRITICAL },
       ),
     );
   }
@@ -513,6 +545,7 @@ export class VioletPoolClient {
     return this.commandResult(
       await this.transport.request(API_ENDPOINTS.setFunctionManually, {
         query: `OMNI,${OMNI_POSITIONS[position]},0,0`,
+        priority: API_PRIORITY_CRITICAL,
       }),
     );
   }
@@ -545,12 +578,16 @@ export class VioletPoolClient {
     }
     const body = await this.transport.request(API_ENDPOINTS.setRs485Live, {
       query: `${pumpName},${slaveId},${mode},${level}`,
+      priority: API_PRIORITY_CRITICAL,
     });
     return stripJsonString(String(body ?? ""));
   }
 
   async endRs485Live(): Promise<string> {
-    const body = await this.transport.request(API_ENDPOINTS.setRs485Live, { query: "DONE" });
+    const body = await this.transport.request(API_ENDPOINTS.setRs485Live, {
+      query: "DONE",
+      priority: API_PRIORITY_CRITICAL,
+    });
     return stripJsonString(String(body ?? ""));
   }
 
@@ -575,7 +612,11 @@ export class VioletPoolClient {
   }
 
   async initUpdate(): Promise<string> {
-    return String((await this.transport.request(API_ENDPOINTS.initUpdate)) ?? "").trim();
+    return String(
+      (await this.transport.request(API_ENDPOINTS.initUpdate, {
+        priority: API_PRIORITY_CRITICAL,
+      })) ?? "",
+    ).trim();
   }
 
   async getUpdateState(): Promise<string> {
@@ -607,7 +648,13 @@ export class VioletPoolClient {
     if (["OFF", "STOP", "AUTO", "DOSSTOP"].includes(normalized)) dosingAction = "DOSSTOP";
     else if (["ON", "START", "DOSSTART"].includes(normalized)) dosingAction = "DOSSTART";
     else throw new VioletPoolError(`Unsupported dosing action for ${key}: ${action}`);
-    const duration = durationSeconds === undefined ? 0 : Math.max(0, Math.trunc(durationSeconds));
+    let duration = 0;
+    if (dosingAction === "DOSSTART") {
+      if (durationSeconds === undefined) {
+        throw new VioletPoolError(`A positive duration is required to start dosing output ${key}`);
+      }
+      duration = validateDuration(durationSeconds, 1);
+    }
     return this.commandResult(
       await this.transport.request(API_ENDPOINTS.triggerManualDosing, {
         method: "POST",
@@ -618,6 +665,7 @@ export class VioletPoolClient {
           from: 1,
           runtime_formatted: `${String(Math.trunc(duration / 60)).padStart(2, "0")}:${String(duration % 60).padStart(2, "0")}`,
         },
+        priority: API_PRIORITY_CRITICAL,
       }),
     );
   }
@@ -642,7 +690,7 @@ export class VioletPoolClient {
     const template = DEVICE_PARAMETERS[key]?.apiTemplate ?? `${key},{action},{duration},{value}`;
     const values: Record<string, number | string> = {
       action,
-      duration: Math.trunc(durationSeconds ?? 0),
+      duration: validateDuration(durationSeconds ?? 0),
       speed: Math.trunc(lastValue ?? 0),
       value: Math.trunc(lastValue ?? 0),
     };

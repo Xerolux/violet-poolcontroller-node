@@ -1,6 +1,6 @@
-const runtimePattern = /(?:(\d+)\s*d)?\s*(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?\s*(?:(\d+)\s*s)?/i;
+const runtimePattern = /^(?:(\d+)\s*d)?\s*(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?\s*(?:(\d+)\s*s)?$/i;
 const hmsPattern = /^(\d+):(\d+):(\d+)$/;
-const uptimePattern = /(?:(\d+)\s*d)?\s*(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?/i;
+const uptimePattern = /^(?:(\d+)\s*d)?\s*(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?$/i;
 
 function componentsToMilliseconds(parts: RegExpMatchArray | null): number {
   if (parts === null) return 0;

@@ -96,6 +96,12 @@ describe("typed model parity", () => {
     expect(readings.toString()).toContain("VioletReadings");
   });
 
+  it("rejects non-finite typed readings", () => {
+    for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(new VioletReadings({ pH_value: value }).ph).toBeUndefined();
+    }
+  });
+
   it("matches state interpretation and translations", () => {
     const state = new VioletState("3|PUMP_ANTI_FREEZE");
     expect(state.mode).toBe("frost_protection");
@@ -125,6 +131,8 @@ describe("input sanitizer parity", () => {
     expect(InputSanitizer.sanitizeNumber("EUR -12.5")).toBe(12.5);
     expect(InputSanitizer.sanitizeNumber("-EUR 12.5")).toBe(-12.5);
     expect(InputSanitizer.sanitizeNumber(Number.NaN)).toBe(0);
+    expect(InputSanitizer.sanitizeInteger(Number.POSITIVE_INFINITY, { fallback: 7 })).toBe(7);
+    expect(InputSanitizer.sanitizeFloat("inf", { fallback: 1.5 })).toBe(1.5);
     expect(InputSanitizer.sanitizeInteger("3.9", { minimum: 1, maximum: 3 })).toBe(3);
     expect(InputSanitizer.sanitizeFloat("7.234", { precision: 2 })).toBe(7.23);
     expect(InputSanitizer.sanitizeBoolean("enabled")).toBe(true);

@@ -120,13 +120,25 @@ The client includes:
 - bounded retry with exponential backoff and jitter;
 - `Retry-After` support for HTTP 429;
 - a circuit breaker for transient communication failures;
-- a process-wide token-bucket rate limiter;
+- an independent token-bucket rate limiter per client, with optional explicit sharing;
 - strict host, endpoint, configuration-key, and setpoint validation;
 - separate error classes for authentication, timeout, payload, range, and unsafe-operation errors.
 
 HTTP 4xx responses fail immediately. They are not retried and do not count toward the circuit
 breaker. Network errors, timeouts, HTTP 429, and HTTP 5xx responses are retryable. Retry timing
-matches the Python default of 10 seconds with exponential backoff and a 300-second cap.
+matches the Python default of 1 second with exponential backoff and a 30-second cap. GET and HEAD
+requests are retried by default; non-idempotent POST requests are not, except for configuration
+writes explicitly marked retryable by the reference client.
+
+Pass a `RateLimiter` when multiple clients should intentionally share one request budget:
+
+```ts
+import { RateLimiter, VioletPoolClient } from "violet-poolcontroller";
+
+const rateLimiter = new RateLimiter();
+const first = new VioletPoolClient({ host: "192.0.2.10", rateLimiter });
+const second = new VioletPoolClient({ host: "192.0.2.11", rateLimiter });
+```
 
 ## Development
 

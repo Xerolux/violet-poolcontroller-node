@@ -138,6 +138,22 @@ describe("Python API wire parity", () => {
     await expect(client.setConfig({})).rejects.toBeInstanceOf(VioletPoolError);
     await expect(client.getCalibrationHistory("")).rejects.toBeInstanceOf(VioletPoolError);
     await expect(client.restoreCalibration("", "")).rejects.toBeInstanceOf(VioletPoolError);
+    await expect(client.setDeviceTemperature("DOSAGE", 28)).rejects.toThrow(
+      /Expected HEATER or SOLAR/,
+    );
+    await expect(client.setDeviceTemperature("heater", 1_000)).rejects.toBeInstanceOf(
+      VioletSetpointError,
+    );
+    for (const durationSeconds of [-1, 0.5, 86_401, Number.NaN]) {
+      await expect(client.setSwitchState("PUMP", "ON", { durationSeconds })).rejects.toThrow(
+        /whole number/,
+      );
+    }
+    for (const durationSeconds of [0.5, 86_401, Number.NaN, Number.POSITIVE_INFINITY]) {
+      await expect(client.setSwitchState("DOS_1_CL", "ON", { durationSeconds })).rejects.toThrow(
+        /whole number/,
+      );
+    }
     await expect(client.setPhTarget(Number.NaN)).rejects.toBeInstanceOf(VioletSetpointError);
     await expect(client.setCanAmount("UNKNOWN", 100)).rejects.toBeInstanceOf(VioletPoolError);
     await expect(client.setOmniPosition(6)).rejects.toBeInstanceOf(VioletPoolError);

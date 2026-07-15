@@ -10,16 +10,18 @@ import {
   VioletPoolError,
   VioletTimeoutError,
 } from "../errors.js";
-import { getGlobalRateLimiter, type RateLimiter } from "../rate-limiter.js";
+import { RateLimiter } from "../rate-limiter.js";
 import type { FetchImplementation, VioletPoolClientOptions } from "../types.js";
 
 interface TransportRequestOptions {
-  method?: "GET" | "POST";
+  method?: "GET" | "HEAD" | "POST";
   parameters?: Readonly<Record<string, string | number | boolean>>;
   query?: string;
   json?: unknown;
   form?: Readonly<Record<string, string | number | boolean>>;
   expectJson?: boolean;
+  priority?: number;
+  retryable?: boolean;
 }
 
 class DeterministicHttpError extends VioletPoolError {}
@@ -117,9 +119,16 @@ export class HttpTransport {
     this.baseUrl = buildBaseUrl(options.host, options.useSsl ?? false);
     this.timeoutMs = Math.max(1_000, Math.trunc(options.timeoutMs ?? 10_000));
     this.maxRetries = Math.max(1, Math.trunc(options.maxRetries ?? 3));
-    this.retryBaseDelayMs = Math.max(0, Math.trunc(options.retryBaseDelayMs ?? 10_000));
+    this.retryBaseDelayMs = Math.max(0, Math.trunc(options.retryBaseDelayMs ?? 1_000));
     this.fetch = options.fetch ?? undiciFetch;
-    this.rateLimiter = getGlobalRateLimiter();
+    this.rateLimiter = options.rateLimiter ?? new RateLimiter();
+    if (options.username?.includes(":") === true) {
+      throw new TypeError("Basic authentication username must not contain ':'");
+    }
+    this.authorization =
+      options.username === undefined
+        ? undefined
+        : `Basic ${Buffer.from(`${options.username}:${options.password ?? ""}`, "utf8").toString("base64")}`;
     if (options.dispatcher !== undefined) {
       this.dispatcher = options.dispatcher;
       this.ownedDispatcher = undefined;
@@ -128,10 +137,6 @@ export class HttpTransport {
       this.dispatcher = agent;
       this.ownedDispatcher = agent;
     }
-    this.authorization =
-      options.username === undefined
-        ? undefined
-        : `Basic ${Buffer.from(`${options.username}:${options.password ?? ""}`, "utf8").toString("base64")}`;
   }
 
   async request(endpoint: string, options: TransportRequestOptions = {}): Promise<unknown> {
@@ -149,7 +154,7 @@ export class HttpTransport {
   }
 
   private async execute(endpoint: string, options: TransportRequestOptions): Promise<unknown> {
-    await this.rateLimiter.wait();
+    await this.rateLimiter.wait({ priority: options.priority ?? 3 });
     const parameterQuery =
       options.parameters === undefined
         ? undefined
@@ -161,19 +166,24 @@ export class HttpTransport {
           ).toString();
     const url = endpointUrl(this.baseUrl, endpoint, options.query ?? parameterQuery);
 
-    for (let attempt = 1; attempt <= this.maxRetries; attempt += 1) {
+    const method = options.method ?? "GET";
+    const attemptLimit =
+      (options.retryable ?? ["GET", "HEAD"].includes(method)) ? this.maxRetries : 1;
+
+    for (let attempt = 1; attempt <= attemptLimit; attempt += 1) {
       try {
         return await this.singleRequest(url, endpoint, options);
       } catch (error) {
         if (!(error instanceof RetryableRequestError)) throw error;
-        if (attempt === this.maxRetries) throw error.publicError;
+        if (attempt === attemptLimit) throw error.publicError;
         const retryAfter =
           error.publicError.code?.startsWith("RETRY_AFTER:") === true
             ? Number(error.publicError.code.slice("RETRY_AFTER:".length))
             : undefined;
-        const exponential = Math.min(300_000, this.retryBaseDelayMs * 2 ** (attempt - 1));
-        const jitter = Math.random() * exponential * 0.1;
-        await delay(retryAfter ?? exponential + jitter);
+        const exponential = Math.min(30_000, this.retryBaseDelayMs * 2 ** (attempt - 1));
+        const baseDelay = retryAfter === undefined ? exponential : Math.min(30_000, retryAfter);
+        const jitter = Math.random() * baseDelay * 0.1;
+        await delay(baseDelay + jitter);
       }
     }
     throw new VioletPoolError("All retry attempts exhausted", { endpoint });

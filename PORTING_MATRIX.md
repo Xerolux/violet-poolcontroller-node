@@ -1,7 +1,7 @@
 # Python-to-TypeScript porting matrix
 
 Source of truth: `Xerolux/violet-poolController-api` 0.0.35 at
-`f10d6605fb9094e9066f96f93c1f47f2e1c55259`.
+`1a1617f235af74a31a3c358ab2f31fcfd749e0a1`.
 
 The TypeScript surface uses camelCase and explicit units. Controller endpoint names and wire
 formats remain unchanged.

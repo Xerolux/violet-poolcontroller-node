@@ -16,6 +16,9 @@ describe("controller parsers", () => {
     expect(parseUptimeMilliseconds("250d 11h 48m")).toBe(21_642_480_000);
     expect(parseOptionalMilliseconds("1.5")).toBe(1_500);
     expect(parseOptionalMilliseconds("NONE")).toBeUndefined();
+    expect(parseRuntimeMilliseconds("5h trailing")).toBe(0);
+    expect(parseRuntimeMilliseconds("prefix 5h")).toBe(0);
+    expect(parseUptimeMilliseconds("5d trailing")).toBe(0);
   });
 
   it("parses epoch values as UTC dates", () => {

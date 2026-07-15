@@ -47,18 +47,35 @@ def assignments(path: Path) -> dict[str, object]:
 
 root = Path(sys.argv[1]).resolve()
 package = root / "violet_poolcontroller_api"
-api_module = ast.parse((package / "api.py").read_text(encoding="utf-8"))
-client = next(
-    node
-    for node in api_module.body
-    if isinstance(node, ast.ClassDef) and node.name == "VioletPoolAPI"
-)
-members = [
-    node.name
-    for node in client.body
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    and (not node.name.startswith("_") or node.name == "__init__")
-]
+classes: dict[str, ast.ClassDef] = {}
+for module_path in package.glob("*.py"):
+    module = ast.parse(module_path.read_text(encoding="utf-8"))
+    for node in module.body:
+        if isinstance(node, ast.ClassDef):
+            classes[node.name] = node
+
+client = classes["VioletPoolAPI"]
+members: list[str] = []
+visited_classes: set[str] = set()
+
+
+def collect_members(class_node: ast.ClassDef) -> None:
+    if class_node.name in visited_classes:
+        return
+    visited_classes.add(class_node.name)
+    for node in class_node.body:
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and (not node.name.startswith("_") or node.name == "__init__")
+            and node.name not in members
+        ):
+            members.append(node.name)
+    for base in class_node.bases:
+        if isinstance(base, ast.Name) and base.id in classes:
+            collect_members(classes[base.id])
+
+
+collect_members(client)
 
 init_values = assignments(package / "__init__.py")
 constant_values = assignments(package / "const_api.py")

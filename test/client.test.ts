@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   OutputState,
+  RateLimiter,
   VioletAuthError,
+  VioletPayloadError,
   VioletPoolClient,
   VioletSetpointError,
   VioletUnsafeOperationError,
@@ -128,6 +130,9 @@ describe("VioletPoolClient", () => {
     const before = controller.state.requests.length;
     await expect(invalid.getReadings()).rejects.toBeInstanceOf(VioletAuthError);
     expect(controller.state.requests.length - before).toBe(1);
+    expect(() => new VioletPoolClient({ host: controller.host, username: "invalid:user" })).toThrow(
+      /must not contain ':'/,
+    );
   });
 
   it("retries transient server failures", async () => {
@@ -142,6 +147,37 @@ describe("VioletPoolClient", () => {
 
     await expect(client.getReadings()).resolves.toBeDefined();
     expect(controller.state.requests).toHaveLength(2);
+  });
+
+  it("does not retry dosing POSTs but explicitly retries configuration writes", async () => {
+    const { controller } = await setup();
+    const client = new VioletPoolClient({
+      host: controller.host,
+      maxRetries: 2,
+      retryBaseDelayMs: 1,
+    });
+    clients.push(client);
+    controller.state.failuresRemaining = 1;
+    await expect(client.manualDosing("Chlor", 30)).rejects.toThrow(/HTTP 500/);
+    expect(controller.state.requests).toHaveLength(1);
+
+    controller.state.failuresRemaining = 1;
+    await expect(client.setConfig({ TEST: 1 })).resolves.toMatchObject({ success: true });
+    expect(controller.state.requests.slice(1)).toHaveLength(2);
+  });
+
+  it("supports explicitly shared rate limiting and numeric dosage states", async () => {
+    const controller = await createMockController();
+    controllers.push(controller);
+    const limiter = new RateLimiter({ maxRequests: 10, burstSize: 0 });
+    const client = new VioletPoolClient({ host: controller.host, rateLimiter: limiter });
+    clients.push(client);
+    controller.state.config.DOSAGE_phminus_use = "1.0";
+
+    await expect(client.isDosageEnabled("pH-")).resolves.toBe(true);
+    expect(limiter.getStats().totalRequests).toBe(1);
+    controller.state.config.DOSAGE_phminus_use = "not-a-number";
+    await expect(client.isDosageEnabled("pH-")).rejects.toBeInstanceOf(VioletPayloadError);
   });
 
   it("supports service, trace, RS485 and update endpoints", async () => {
